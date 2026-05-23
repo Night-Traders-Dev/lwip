@@ -67,18 +67,15 @@
 /* @todo: which includes are really needed? */
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
-#include "mbedtls/certs.h"
 #include "mbedtls/x509.h"
 #include "mbedtls/ssl.h"
-#include "mbedtls/net.h"
+#include "mbedtls/net_sockets.h"
 #include "mbedtls/error.h"
 #include "mbedtls/debug.h"
 #include "mbedtls/platform.h"
 #include "mbedtls/memory_buffer_alloc.h"
 #include "mbedtls/ssl_cache.h"
 #include "mbedtls/ssl_ticket.h"
-
-#include "mbedtls/ssl_internal.h" /* to call mbedtls_flush_output after ERR_MEM */
 
 #include <string.h>
 
@@ -515,7 +512,7 @@ altcp_mbedtls_lower_sent(void *arg, struct altcp_pcb *inner_conn, u16_t len)
       return ERR_OK;
     }
     /* try to send more if we failed before */
-    mbedtls_ssl_flush_output(&state->ssl_context);
+    /* mbedtls_ssl_flush_output(&state->ssl_context); */
     /* call upper sent with len==0 if the application already sent data */
     if ((state->flags & ALTCP_MBEDTLS_FLAGS_APPLDATA_SENT) && conn->sent) {
       return conn->sent(conn->arg, conn, 0);
@@ -539,7 +536,7 @@ altcp_mbedtls_lower_poll(void *arg, struct altcp_pcb *inner_conn)
     if (conn->state) {
       altcp_mbedtls_state_t *state = (altcp_mbedtls_state_t *)conn->state;
       /* try to send more if we failed before */
-      mbedtls_ssl_flush_output(&state->ssl_context);
+      /* mbedtls_ssl_flush_output(&state->ssl_context); */
       if (altcp_mbedtls_handle_rx_appldata(conn, state) == ERR_ABRT) {
         return ERR_ABRT;
       }
@@ -675,7 +672,7 @@ altcp_tls_create_config(int is_server, uint8_t cert_count, uint8_t pkey_count, i
   struct altcp_tls_config *conf;
   mbedtls_x509_crt *mem;
 
-  if (TCP_WND < MBEDTLS_SSL_MAX_CONTENT_LEN) {
+  if (TCP_WND < MBEDTLS_SSL_IN_CONTENT_LEN) {
     LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG|LWIP_DBG_LEVEL_SERIOUS,
       ("altcp_tls: TCP_WND is smaller than the RX decrypion buffer, connection RX might stall!\n"));
   }
@@ -825,7 +822,7 @@ err_t altcp_tls_config_server_add_privkey_cert(struct altcp_tls_config *config,
     return ERR_VAL;
   }
 
-  ret = mbedtls_pk_parse_key(pkey, (const unsigned char *) privkey, privkey_len, privkey_pass, privkey_pass_len);
+  ret = mbedtls_pk_parse_key(pkey, (const unsigned char *) privkey, privkey_len, privkey_pass, privkey_pass_len, mbedtls_ctr_drbg_random, &altcp_tls_entropy_rng->ctr_drbg);
   if (ret != 0) {
     LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("mbedtls_pk_parse_public_key failed: %d\n", ret));
     mbedtls_x509_crt_free(srvcert);
@@ -928,7 +925,7 @@ altcp_tls_create_config_client_2wayauth(const u8_t *ca, size_t ca_len, const u8_
   }
 
   mbedtls_pk_init(conf->pkey);
-  ret = mbedtls_pk_parse_key(conf->pkey, privkey, privkey_len, privkey_pass, privkey_pass_len);
+  ret = mbedtls_pk_parse_key(conf->pkey, privkey, privkey_len, privkey_pass, privkey_pass_len, mbedtls_ctr_drbg_random, &altcp_tls_entropy_rng->ctr_drbg);
   if (ret != 0) {
     LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("mbedtls_pk_parse_key failed: %d 0x%x", ret, -1*ret));
     altcp_mbedtls_free_config(conf);
@@ -1140,12 +1137,14 @@ altcp_mbedtls_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t
   /* HACK: if thre is something left to send, try to flush it and only
      allow sending more if this succeeded (this is a hack because neither
      returning 0 nor MBEDTLS_ERR_SSL_WANT_WRITE worked for me) */
+  /*
   if (state->ssl_context.out_left) {
     mbedtls_ssl_flush_output(&state->ssl_context);
     if (state->ssl_context.out_left) {
       return ERR_MEM;
     }
   }
+  */
   ret = mbedtls_ssl_write(&state->ssl_context, (const unsigned char *)dataptr, len);
   /* try to send data... */
   altcp_output(conn->inner_conn);
@@ -1265,6 +1264,13 @@ const struct altcp_functions altcp_mbedtls_functions = {
   , altcp_default_dbg_get_tcp_state
 #endif
 };
+
+void altcp_tls_config_disable_verify(struct altcp_tls_config *config)
+{
+  if (config) {
+    mbedtls_ssl_conf_authmode(&config->conf, MBEDTLS_SSL_VERIFY_NONE);
+  }
+}
 
 #endif /* LWIP_ALTCP_TLS && LWIP_ALTCP_TLS_MBEDTLS */
 #endif /* LWIP_ALTCP */

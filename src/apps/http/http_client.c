@@ -906,4 +906,13 @@ httpc_get_file_dns_to_disk(const char* server_name, u16_t port, const char* uri,
 }
 #endif /* LWIP_HTTPC_HAVE_FILE_IO */
 
+struct altcp_pcb*
+httpc_get_tcp_pcb(httpc_state_t *connection)
+{
+  if (connection) {
+    return connection->pcb;
+  }
+  return NULL;
+}
+
 #endif /* LWIP_TCP && LWIP_CALLBACK_API */
